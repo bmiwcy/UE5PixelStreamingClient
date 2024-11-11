@@ -8,6 +8,8 @@
 
 #include <functional>
 
+#include <iostream>
+
 namespace opentera
 {
     class CreateSessionDescriptionObserverHelper : public webrtc::CreateSessionDescriptionObserver

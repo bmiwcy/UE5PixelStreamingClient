@@ -2,6 +2,7 @@
 #include <OpenteraWebrtcNativeClient/Codecs/VideoCodecFactories.h>
 #include <OpenteraWebrtcNativeClient/Signaling/WebSocketSignalingClient.h>
 
+
 #include <api/audio_codecs/builtin_audio_decoder_factory.h>
 #include <api/audio_codecs/builtin_audio_encoder_factory.h>
 #include <api/create_peerconnection_factory.h>
@@ -17,6 +18,14 @@ WebrtcClient::WebrtcClient(
       m_destructorCalled(false)
 {
     m_signalingClient = make_unique<WebSocketSignalingClient>(signalingServerConfiguration);
+
+    // 设置 m_onOfferReceived 回调，用于处理 offer 消息
+    if (auto wsSignalingClient = dynamic_cast<WebSocketSignalingClient*>(m_signalingClient.get()))
+    {
+        wsSignalingClient->m_onOfferReceived = 
+            [this](const std::string& fromId, const std::string& sdp) { receivePeerCall(fromId, sdp); };
+    }
+
     connectSignalingClientCallbacks();
 
     m_internalClientThread = move(rtc::Thread::Create());
@@ -394,27 +403,28 @@ void WebrtcClient::receivePeerCall(const string& fromId, const string& sdp)
         [this, fromId, sdp]()
         {
             log("receivePeerCall (from_id=" + fromId + ")");
-            auto fromClientIt = m_roomClientsById.find(fromId);
-            if (fromClientIt == m_roomClientsById.end())
-            {
-                return;
-            }
 
+            // 检查是否已经有处理器
             if (m_peerConnectionHandlersById.find(fromId) != m_peerConnectionHandlersById.end())
             {
                 log("receivePeerCall failed because " + fromId + " is already connected.");
                 return;
             }
-            if (!getCallAcceptance(fromId))
-            {
-                m_signalingClient->rejectCall(fromId);
-                return;
-            }
 
-            m_peerConnectionHandlersById[fromId] = createConnection(fromId, fromClientIt->second, false);
-            m_peerConnectionHandlersById[fromId]->receivePeerCall(sdp);
+            // 创建并接受连接
+            m_peerConnectionHandlersById[fromId] = createConnection(fromId, Client(), false);  // 使用空的 Client 对象
+            if (m_peerConnectionHandlersById[fromId])
+            {
+                m_peerConnectionHandlersById[fromId]->receivePeerCall(sdp);
+            }
+            else
+            {
+                std::cerr << "Failed to create PeerConnectionHandler for " << fromId << std::endl;
+            }
         });
 }
+
+
 
 void WebrtcClient::receivePeerCallAnswer(const string& fromId, const string& sdp)
 {
@@ -510,6 +520,7 @@ bool WebrtcClient::getCallAcceptance(const string& id)
 unique_ptr<PeerConnectionHandler>
     WebrtcClient::createConnection(const string& peerId, const Client& peerClient, bool isCaller)
 {
+
     return callSync(
         m_internalClientThread.get(),
         [&, this]()

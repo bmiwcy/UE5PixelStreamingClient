@@ -5,7 +5,10 @@
 #include <OpenteraWebrtcNativeClient/Sources/VideoSource.h>
 #include <OpenteraWebrtcNativeClient/Handlers/StreamPeerConnectionHandler.h>
 
+#include <OpenteraWebrtcNativeClient/Signaling/WebSocketSignalingClient.h>
 #include <OpenteraWebrtcNativeClient/WebrtcClient.h>
+
+#include <iostream>
 
 #include <memory>
 
@@ -55,6 +58,8 @@ namespace opentera
 
         DECLARE_NOT_COPYABLE(StreamClient);
         DECLARE_NOT_MOVABLE(StreamClient);
+
+        void connect();
 
         bool isLocalAudioMuted();
         void muteLocalAudio();

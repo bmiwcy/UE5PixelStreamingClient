@@ -110,40 +110,66 @@ void WebSocketSignalingClient::closeSync()
 
 void WebSocketSignalingClient::callAll()
 {
-    m_ws.send(eventToMessage("call-all"));
+    auto message = eventToMessage("call-all");
+    m_ws.send(message);
 }
 
 void WebSocketSignalingClient::callIds(const vector<string>& ids)
 {
-    m_ws.send(eventToMessage("call-ids", ids));
+    auto message = eventToMessage("call-ids", ids);
+    m_ws.send(message);
 }
 
 void WebSocketSignalingClient::closeAllRoomPeerConnections()
 {
-    m_ws.send(eventToMessage("close-all-room-peer-connections"));
+    auto message = eventToMessage("close-all-room-peer-connections");
+    m_ws.send(message);
 }
 
 void WebSocketSignalingClient::callPeer(const string& toId, const string& sdp)
 {
     nlohmann::json offer{{"sdp", sdp}, {"type", "offer"}};
     nlohmann::json data{{"toId", toId}, {"offer", offer}};
-    m_ws.send(eventToMessage("call-peer", data));
+    auto message = eventToMessage("call-peer", data);
+    m_ws.send(message);
 }
 
 void WebSocketSignalingClient::makePeerCallAnswer(const string& toId, const string& sdp)
 {
-    nlohmann::json offer{
-        {"sdp", sdp},
+    //nlohmann::json offer{
+    //    {"sdp", sdp},
+    //    {"type", "answer"},
+    //};
+    //nlohmann::json data{{"streamerId", "Camera01_Default"}, {"answer", offer}};
+    //auto message = eventToMessage("make-peer-call-answer", data);
+    // 提取 ICE ufrag (usernameFragment)
+
+    std::smatch match;
+    if (std::regex_search(sdp, match, std::regex("a=ice-ufrag:(\\S+)")))
+    {
+        m_usernameFragment = match[1].str(); // 将 m_usernameFragment 定义为类的成员变量
+        std::cout << "Extracted usernameFragment: " << m_usernameFragment << std::endl;
+    }
+    else
+    {
+        std::cerr << "Failed to extract usernameFragment from SDP." << std::endl;
+    }
+    // 构建简化的 answer 消息，仅包含 type 和 sdp 字段
+    nlohmann::json answerMessage{
         {"type", "answer"},
+        {"sdp", sdp}
     };
-    nlohmann::json data{{"toId", toId}, {"answer", offer}};
-    m_ws.send(eventToMessage("make-peer-call-answer", data));
+    
+    // 将 JSON 数据转换为字符串格式并发送
+    auto message = answerMessage.dump();
+    m_ws.send(message);
 }
 
 void WebSocketSignalingClient::rejectCall(const string& toId)
 {
     nlohmann::json data{{"toId", toId}};
-    m_ws.send(eventToMessage("make-peer-call-answer", data));
+    auto message = eventToMessage("make-peer-call-answer", data);
+    m_ws.send(message);
 }
 
 void WebSocketSignalingClient::sendIceCandidate(
@@ -152,14 +178,29 @@ void WebSocketSignalingClient::sendIceCandidate(
     const string& candidate,
     const string& toId)
 {
-    nlohmann::json candidateJson{
-        {"sdpMid", sdpMid},
-        {"sdpMLineIndex", sdpMLineIndex},
-        {"candidate", candidate},
+    //nlohmann::json candidateJson{
+    //    {"sdpMid", sdpMid},
+    //    {"sdpMLineIndex", sdpMLineIndex},
+    //    {"candidate", candidate},
+    //};
+    //nlohmann::json data{{"toId", toId}, {"candidate", candidateJson}};
+    //auto message = eventToMessage("send-ice-candidate", data);
+    // 构建符合要求的 ICE Candidate JSON 消息
+    nlohmann::json candidateMessage = {
+        {"type", "iceCandidate"},
+        {"candidate", {
+            {"candidate", candidate},
+            {"sdpMid", sdpMid},
+            {"sdpMLineIndex", sdpMLineIndex},
+            {"usernameFragment", m_usernameFragment}  // 确认是否使用 toId 作为 usernameFragment，或使用正确的值替换
+        }}
     };
-    nlohmann::json data{{"toId", toId}, {"candidate", candidateJson}};
-    m_ws.send(eventToMessage("send-ice-candidate", data));
+
+    // 将目标对象设为 Camera01_Default
+    auto message = candidateMessage.dump();
+    m_ws.send(message);
 }
+
 
 void WebSocketSignalingClient::connectWsEvents()
 {
@@ -188,13 +229,15 @@ void WebSocketSignalingClient::connectWsEvents()
 
 void WebSocketSignalingClient::onWsOpenEvent()
 {
-    nlohmann::json data{
-        {"name", m_configuration.clientName()},
-        {"data", m_configuration.clientData()},
-        {"room", m_configuration.room()},
-        {"password", m_configuration.password()},
-        {"protocolVersion", SignalingProtocolVersion}};
-    m_ws.send(eventToMessage("join-room", data));
+    //nlohmann::json data{
+    //    {"name", m_configuration.clientName()},
+    //    {"data", m_configuration.clientData()},
+    //    {"room", m_configuration.room()},
+    //    {"password", m_configuration.password()},
+    //    {"protocolVersion", SignalingProtocolVersion}};
+    //m_ws.send(eventToMessage("join-room", data));
+    nlohmann::json listStreamersMessage = {{"type", "listStreamers"}};
+    m_ws.send(listStreamersMessage.dump());
 }
 
 void WebSocketSignalingClient::onWsCloseEvent()
@@ -207,49 +250,77 @@ void WebSocketSignalingClient::onWsErrorEvent(const string& error)
     invokeIfCallable(m_onSignalingConnectionError, error);
 }
 
+void WebSocketSignalingClient::onStreamerListReceived(const nlohmann::json& data)
+{
+    if (data.contains("ids") && data["ids"].is_array())
+    {
+        auto availableStreamers = data["ids"];
+        
+        if (!availableStreamers.empty())
+        {
+            // 选择要订阅的 streamerId
+            std::string streamerId = availableStreamers[0];
+            
+            // 构建并发送订阅请求
+            nlohmann::json subscribeMessage = {
+                {"type", "subscribe"},
+                {"streamerId", streamerId}
+            };
+
+            m_ws.send(subscribeMessage.dump());
+            std::cout << "Subscribed to streamerId: " << streamerId << std::endl;
+        }
+        else
+        {
+            std::cerr << "No available streamers to subscribe." << std::endl;
+        }
+    }
+    else
+    {
+        std::cerr << "Invalid 'streamerList' message format." << std::endl;
+    }
+}
+
 void WebSocketSignalingClient::onWsMessage(const string& message)
 {
-    nlohmann::json parsedMesssage = nlohmann::json::parse(message, nullptr, false);
+     nlohmann::json parsedMessage = nlohmann::json::parse(message, nullptr, false);
 
-    if (parsedMesssage.is_discarded() || !parsedMesssage.is_object() || !parsedMesssage.contains("event"))
+    // 检查消息是否为有效的 JSON 格式，包含所需的 "type" 字段
+    if (parsedMessage.is_discarded() || !parsedMessage.is_object() || !parsedMessage.contains("type"))
     {
+        std::cerr << "Received invalid message: " << message << std::endl;
         return;
     }
 
-    string event = parsedMesssage["event"];
-    nlohmann::json data;
-    if (parsedMesssage.contains("data"))
-    {
-        data = parsedMesssage["data"];
-    }
+    // 获取消息的类型
+    std::string messageType = parsedMessage["type"];
 
-    if (event == "join-room-answer")
+    // 根据消息类型进行处理
+    if (messageType == "streamerList")
     {
-        onJoinRoomAnswerEvent(data);
+        onStreamerListReceived(parsedMessage);  // 处理 streamerList 消息
     }
-    else if (event == "room-clients")
+    else if (messageType == "offer")
     {
-        onRoomClientsEvent(data);
+        std::string sdp = parsedMessage["sdp"];
+        // 如果没有 `fromId`，使用一个默认值
+        std::string fromId = "default_id";  // 或者空字符串 ""
+
+        if (m_onOfferReceived)
+        {
+            m_onOfferReceived(fromId, sdp);
+        }
+
+        std::cout << "Received offer with default fromId" << std::endl;
+
     }
-    else if (event == "make-peer-call")
+    else if (messageType == "iceCandidate")
     {
-        onMakePeerCallEvent(data);
+
     }
-    else if (event == "peer-call-received")
+    else
     {
-        onPeerCallReceivedEvent(data);
-    }
-    else if (event == "peer-call-answer-received")
-    {
-        onPeerCallAnswerReceivedEvent(data);
-    }
-    else if (event == "close-all-peer-connections-request-received")
-    {
-        onCloseAllPeerConnectionsRequestReceivedEvent();
-    }
-    else if (event == "ice-candidate-received")
-    {
-        onIceCandidateReceivedEvent(data);
+        std::cerr << "Unknown message type received: " << messageType << std::endl;
     }
 }
 

@@ -4,6 +4,9 @@
 #include <OpenteraWebrtcNativeClient/Signaling/SignalingClient.h>
 
 #include <ixwebsocket/IXWebSocket.h>
+#include <iostream>
+#include <regex>
+
 
 namespace opentera
 {
@@ -41,7 +44,17 @@ namespace opentera
             const std::string& candidate,
             const std::string& toId) override;
 
+        void sendMessage(const std::string& message) {
+            m_ws.send(message);
+        }
+
+        void setOnOfferReceived(const std::function<void(const std::string& sdp)>& callback);
+        std::function<void(const std::string& fromId, const std::string& sdp)> m_onOfferReceived;
     private:
+        std::string m_usernameFragment;
+
+        void onStreamerListReceived(const nlohmann::json& data);
+
         void connectWsEvents();
 
         void onWsOpenEvent();

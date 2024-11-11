@@ -116,6 +116,7 @@ StreamClient::~StreamClient()
     m_audioDeviceModule->setOnMixedAudioFrameReceived(function<void(const void*, int, int, size_t, size_t)>());
 }
 
+
 /**
  * @brief Mutes or unmutes the local audio.
  * @param muted indicates if the local audio is muted or not
@@ -216,4 +217,21 @@ unique_ptr<PeerConnectionHandler>
         m_onVideoFrameReceived,
         m_onEncodedVideoFrameReceived,
         m_onAudioFrameReceived);
+}
+
+void StreamClient::connect()
+{
+    // 调用父类的 connect 方法来处理基础连接逻辑
+    WebrtcClient::connect();
+
+    //// 设置 onSignalingConnectionOpened 回调
+    //setOnSignalingConnectionOpened([this]() {
+    //    if (auto wsSignalingClient = dynamic_cast<WebSocketSignalingClient*>(m_signalingClient.get())) {
+    //        nlohmann::json message = {{"type", "listStreamers"}};
+    //        wsSignalingClient->sendMessage(message.dump());
+    //        std::cout << "Sent initial request for streamer list." << std::endl;
+    //    } else {
+    //        std::cerr << "Error: m_signalingClient is not a WebSocketSignalingClient." << std::endl;
+    //    }
+    //});
 }
