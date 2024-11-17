@@ -6,6 +6,7 @@
 #include <ixwebsocket/IXWebSocket.h>
 #include <iostream>
 #include <regex>
+#include <unordered_map>
 
 
 namespace opentera
@@ -17,6 +18,7 @@ namespace opentera
 
     public:
         WebSocketSignalingClient(SignalingServerConfiguration configuration);
+        WebSocketSignalingClient(SignalingServerConfiguration configuration, const std::vector<std::string>& streamerList);
         ~WebSocketSignalingClient() override;
 
         DECLARE_NOT_COPYABLE(WebSocketSignalingClient);
@@ -50,6 +52,8 @@ namespace opentera
 
         void setOnOfferReceived(const std::function<void(const std::string& sdp)>& callback);
         std::function<void(const std::string& fromId, const std::string& sdp)> m_onOfferReceived;
+        std::vector<std::string> m_streamerList;
+        std::unordered_map<std::string, std::string> m_streamerIdMap;
     private:
         std::string m_usernameFragment;
 

@@ -71,6 +71,10 @@ namespace opentera
             SignalingServerConfiguration&& signalingServerConfiguration,
             WebrtcConfiguration&& webrtcConfiguration,
             VideoStreamConfiguration&& videoStreamConfiguration);
+        WebrtcClient(SignalingServerConfiguration&& signalingServerConfiguration,
+                 WebrtcConfiguration&& webrtcConfiguration,
+                 VideoStreamConfiguration&& videoStreamConfiguration,
+                 const std::vector<std::string>& streamerList);
         virtual ~WebrtcClient();
 
         DECLARE_NOT_COPYABLE(WebrtcClient);

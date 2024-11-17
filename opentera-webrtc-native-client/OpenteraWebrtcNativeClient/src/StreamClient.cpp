@@ -4,6 +4,30 @@ using namespace opentera;
 using namespace std;
 
 /**
+ * @brief Creates a stream client with streamerIds
+ *
+ * @param signalingServerConfiguration The configuration to connect to the
+ * signaling server
+ * @param webrtcConfiguration The WebRTC configuration
+ * @param videoStreamConfiguration The video stream configuration
+ */
+StreamClient::StreamClient(
+    SignalingServerConfiguration signalingServerConfiguration,
+    WebrtcConfiguration webrtcConfiguration,
+    VideoStreamConfiguration videoStreamConfiguration,
+    const std::vector<std::string>& streamerList,
+    const std::string& streamId)
+    : WebrtcClient(move(signalingServerConfiguration), move(webrtcConfiguration), move(videoStreamConfiguration), streamerList),
+      m_hasOnMixedAudioFrameReceivedCallback(false),
+      m_isLocalAudioMuted(false),
+      m_isRemoteAudioMuted(false),
+      m_isLocalVideoMuted(false),
+      streamId(streamId)
+{
+}
+
+
+/**
  * @brief Creates a stream client
  *
  * @param signalingServerConfiguration The configuration to connect to the

@@ -19,6 +19,7 @@ target_link_libraries(CppUE5PixelStreamingClient
     OpenteraWebrtcNativeClient
     opencv_videoio
     opencv_highgui
+    oscpack
 )
 
 if (NOT WIN32)

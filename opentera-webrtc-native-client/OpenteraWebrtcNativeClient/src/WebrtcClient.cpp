@@ -10,6 +10,59 @@
 using namespace opentera;
 using namespace std;
 
+WebrtcClient::WebrtcClient(SignalingServerConfiguration&& signalingServerConfiguration,
+                           WebrtcConfiguration&& webrtcConfiguration,
+                           VideoStreamConfiguration&& videoStreamConfiguration,
+                           const std::vector<std::string>& streamerList)
+    : m_webrtcConfiguration(std::move(webrtcConfiguration)),
+      m_destructorCalled(false)
+{
+    m_signalingClient = std::make_unique<WebSocketSignalingClient>(signalingServerConfiguration, streamerList);
+
+    // 设置 m_onOfferReceived 回调，用于处理 offer 消息
+    if (auto wsSignalingClient = dynamic_cast<WebSocketSignalingClient*>(m_signalingClient.get()))
+    {
+        wsSignalingClient->m_onOfferReceived = 
+            [this](const std::string& fromId, const std::string& sdp) { receivePeerCall(fromId, sdp); };
+    }
+
+    connectSignalingClientCallbacks();
+
+    m_internalClientThread = move(rtc::Thread::Create());
+    m_internalClientThread->SetName(signalingServerConfiguration.clientName() + " - internal client", nullptr);
+    m_internalClientThread->Start();
+
+    m_networkThread = move(rtc::Thread::CreateWithSocketServer());
+    m_networkThread->SetName(signalingServerConfiguration.clientName() + " - network", nullptr);
+    m_networkThread->Start();
+    m_workerThread = move(rtc::Thread::Create());
+    m_workerThread->SetName(signalingServerConfiguration.clientName() + " - worker", nullptr);
+    m_workerThread->Start();
+    m_signalingThread = move(rtc::Thread::Create());
+    m_signalingThread->SetName(signalingServerConfiguration.clientName() + " - signaling", nullptr);
+    m_signalingThread->Start();
+
+    m_audioDeviceModule =
+        rtc::scoped_refptr<OpenteraAudioDeviceModule>(new rtc::RefCountedObject<OpenteraAudioDeviceModule>);
+    m_audioProcessing = webrtc::AudioProcessingBuilder().Create();
+    m_peerConnectionFactory = webrtc::CreatePeerConnectionFactory(
+        m_networkThread.get(),
+        m_workerThread.get(),
+        m_signalingThread.get(),
+        m_audioDeviceModule,
+        webrtc::CreateBuiltinAudioEncoderFactory(),
+        webrtc::CreateBuiltinAudioDecoderFactory(),
+        createVideoEncoderFactory(videoStreamConfiguration),
+        createVideoDecoderFactory(videoStreamConfiguration),
+        nullptr,  // Audio mixer,
+        m_audioProcessing);
+
+    if (!m_peerConnectionFactory)
+    {
+        throw runtime_error("CreatePeerConnectionFactory failed");
+    }
+}
+
 WebrtcClient::WebrtcClient(
     SignalingServerConfiguration&& signalingServerConfiguration,
     WebrtcConfiguration&& webrtcConfiguration,

@@ -55,6 +55,15 @@ WebSocketSignalingClient::WebSocketSignalingClient(SignalingServerConfiguration 
     call_once(initNetSystemOnceFlag, []() { ix::initNetSystem(); });
 }
 
+WebSocketSignalingClient::WebSocketSignalingClient(SignalingServerConfiguration configuration, const std::vector<std::string>& streamerList)
+    : SignalingClient(move(configuration)), m_streamerList(streamerList)
+{
+    constexpr int PingIntervalSecs = 10;
+    m_ws.setPingInterval(PingIntervalSecs);
+
+    call_once(initNetSystemOnceFlag, []() { ix::initNetSystem(); });
+}
+
 WebSocketSignalingClient::~WebSocketSignalingClient()
 {
     m_ws.stop();
@@ -148,7 +157,6 @@ void WebSocketSignalingClient::makePeerCallAnswer(const string& toId, const stri
     if (std::regex_search(sdp, match, std::regex("a=ice-ufrag:(\\S+)")))
     {
         m_usernameFragment = match[1].str(); // 将 m_usernameFragment 定义为类的成员变量
-        std::cout << "Extracted usernameFragment: " << m_usernameFragment << std::endl;
     }
     else
     {
@@ -258,28 +266,73 @@ void WebSocketSignalingClient::onStreamerListReceived(const nlohmann::json& data
         
         if (!availableStreamers.empty())
         {
-            // 选择要订阅的 streamerId
-            std::string streamerId = availableStreamers[0];
-            
-            // 构建并发送订阅请求
-            nlohmann::json subscribeMessage = {
-                {"type", "subscribe"},
-                {"streamerId", streamerId}
-            };
+            // 遍历 m_streamerList 并仅订阅 availableStreamers 中存在的 streamerId
+            for (const auto& streamerId : m_streamerList)
+            {
+                if (std::find(availableStreamers.begin(), availableStreamers.end(), streamerId) != availableStreamers.end())
+                {
+                    // 构建并发送订阅请求
+                    nlohmann::json subscribeMessage = {
+                        {"type", "subscribe"},
+                        {"streamerId", streamerId}
+                    };
 
-            m_ws.send(subscribeMessage.dump());
-            std::cout << "Subscribed to streamerId: " << streamerId << std::endl;
+                    m_ws.send(subscribeMessage.dump());
+                    //std::cout << "Subscribed to streamerId: " << streamerId << std::endl;
+                }
+                else
+                {
+                    //std::cout << "StreamerId not available: " << streamerId << std::endl;
+                }
+            }
         }
         else
         {
-            std::cerr << "No available streamers to subscribe." << std::endl;
+            //std::cerr << "No available streamers to subscribe." << std::endl;
         }
     }
     else
     {
-        std::cerr << "Invalid 'streamerList' message format." << std::endl;
+        //std::cerr << "Invalid 'streamerList' message format." << std::endl;
     }
 }
+
+
+//void WebSocketSignalingClient::onStreamerListReceived(const nlohmann::json& data)
+//{
+//    //for (const auto& streamerId : m_streamerList)
+//    //{
+//    //    std::cout << "Streamer ID: " << streamerId << std::endl;
+//    //}
+//
+//    if (data.contains("ids") && data["ids"].is_array())
+//    {
+//        auto availableStreamers = data["ids"];
+//        
+//        if (!availableStreamers.empty())
+//        {
+//            // 选择要订阅的 streamerId
+//            std::string streamerId = availableStreamers[0];
+//            
+//            // 构建并发送订阅请求
+//            nlohmann::json subscribeMessage = {
+//                {"type", "subscribe"},
+//                {"streamerId", streamerId}
+//            };
+//
+//            m_ws.send(subscribeMessage.dump());
+//            std::cout << "Subscribed to streamerId: " << streamerId << std::endl;
+//        }
+//        else
+//        {
+//            std::cerr << "No available streamers to subscribe." << std::endl;
+//        }
+//    }
+//    else
+//    {
+//        std::cerr << "Invalid 'streamerList' message format." << std::endl;
+//    }
+//}
 
 void WebSocketSignalingClient::onWsMessage(const string& message)
 {
@@ -303,16 +356,17 @@ void WebSocketSignalingClient::onWsMessage(const string& message)
     else if (messageType == "offer")
     {
         std::string sdp = parsedMessage["sdp"];
-        // 如果没有 `fromId`，使用一个默认值
-        std::string fromId = "default_id";  // 或者空字符串 ""
+        std::smatch match;
+        if (std::regex_search(sdp, match, std::regex("a=ice-ufrag:(\\S+)")))
+        {
+            m_usernameFragment = match[1].str(); // 将 m_usernameFragment 定义为类的成员变量
+        }
+        std::string fromId = m_usernameFragment;
 
         if (m_onOfferReceived)
         {
             m_onOfferReceived(fromId, sdp);
         }
-
-        std::cout << "Received offer with default fromId" << std::endl;
-
     }
     else if (messageType == "iceCandidate")
     {
@@ -320,7 +374,7 @@ void WebSocketSignalingClient::onWsMessage(const string& message)
     }
     else
     {
-        std::cerr << "Unknown message type received: " << messageType << std::endl;
+        //std::cerr << "Unknown message type received: " << messageType << std::endl;
     }
 }
 

@@ -34,6 +34,14 @@ namespace opentera
         bool m_isLocalVideoMuted;
 
     public:
+        std::string streamId;
+        StreamClient(
+            SignalingServerConfiguration signalingServerConfiguration,
+            WebrtcConfiguration webrtcConfiguration,
+            VideoStreamConfiguration videoStreamConfiguration,
+            const std::vector<std::string>& streamerList,
+            const std::string& streamId
+            );
         StreamClient(
             SignalingServerConfiguration signalingServerConfiguration,
             WebrtcConfiguration webrtcConfiguration,

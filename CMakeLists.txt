@@ -62,7 +62,7 @@ option(OPENTERA_WEBRTC_ENABLE_TESTS "Build tests" ON)
 option(OPENTERA_WEBRTC_ENABLE_EXAMPLES "Build examples" ON)
 
 # Default behavior is to disable GStreamer examples
-option(OPENTERA_WEBRTC_ENABLE_GSTREAMER "Compile with GStreamer support" OFF)
+option(OPENTERA_WEBRTC_ENABLE_GSTREAMER "Compile with GStreamer support" ON)
 
 # Default behavior is to enable stub file
 option(OPENTERA_WEBRTC_ENABLE_PYTHON_SO_STUB "Generate stub file" ON)

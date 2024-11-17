@@ -10,297 +10,246 @@
 #include <opencv2/videoio.hpp>
 #include <opencv2/highgui.hpp>
 
-#include <cmath>
+#include "oscpack/osc/OscOutboundPacketStream.h"
+#include "oscpack/ip/UdpSocket.h"
+
 #include <iostream>
 #include <thread>
-#include <vector>
-#include <cstdlib>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <unordered_map>
 
 using namespace opentera;
 using namespace std;
 
-std::queue<cv::Mat> frameQueue;
-std::mutex queueMutex;
+// Global variables
+std::unordered_map<std::string, std::string> clientIdToStreamId;
+std::mutex frameMutex;
 std::condition_variable frameAvailable;
-std::atomic<bool> isRunning(true);
+std::unordered_map<std::string, std::queue<cv::Mat>> frameQueues;
+std::atomic<bool> isRunning{true};
 
-void onVideoFrameReceived(const Client& client, const cv::Mat& frame, uint64_t timestampUs)
-{
-    cout << "Received video frame from client: " << client.name() << " at timestamp " << timestampUs << endl;
-    cv::imshow("Video Frame", frame);  // 显示视频帧
-    cv::waitKey(1);  // 等待一毫秒
+// OSC 
+#define ADDRESS "192.168.0.165"
+#define PORT 8000
+#define OUTPUT_BUFFER_SIZE 1024
+
+void oscMessageHandler() {
+    UdpTransmitSocket transmitSocket(IpEndpointName(ADDRESS, PORT));
+    
+    while (isRunning) {
+        std::cout << "Enter 6 coordinates (separated by spaces): ";
+        std::string input;
+        
+        if (std::getline(std::cin, input)) {
+            std::istringstream iss(input);
+            float values[6];
+            bool validInput = true;
+
+            for (int i = 0; i < 6; ++i) {
+                int tempValue;
+                if (iss >> tempValue) {
+                    values[i] = static_cast<float>(tempValue);
+                } else {
+                    validInput = false;
+                    break;
+                }
+            }
+
+            if (validInput) {
+                char buffer[OUTPUT_BUFFER_SIZE];
+                osc::OutboundPacketStream p(buffer, OUTPUT_BUFFER_SIZE);
+
+                p << osc::BeginBundleImmediate
+                  << osc::BeginMessage("/unreal/move");
+
+                for (int i = 0; i < 6; ++i) {
+                    p << values[i];
+                    std::cout << "Sending value: " << values[i] << std::endl; // 调试输出
+                }
+
+                p << osc::EndMessage
+                  << osc::EndBundle;
+
+                transmitSocket.Send(p.Data(), p.Size());
+            } else {
+                std::cerr << "Invalid input. Please enter 6 integer values." << std::endl;
+            }
+        } else {
+            break;
+        }
+    }
 }
 
 
-class CvVideoCaptureVideoSource : public VideoSource
+
+// Function to display video frames, creating a window for each streamId
+void displayThread(const std::vector<std::string>& streamerList)
 {
-    atomic_bool m_stopped;
-    thread m_thread;
-    string m_path;
-
-public:
-    CvVideoCaptureVideoSource(string path)
-        : VideoSource(VideoSourceConfiguration::create(false, true)),
-          m_stopped(false),
-          m_thread(&CvVideoCaptureVideoSource::run, this),
-          m_path(move(path))
+    // 为每个 streamId 创建窗口
+    for (const auto& streamId : streamerList)
     {
+        cv::namedWindow(streamId, cv::WINDOW_AUTOSIZE);
     }
 
-    ~CvVideoCaptureVideoSource() override
+    while (isRunning)
     {
-        m_stopped.store(true);
-        m_thread.join();
-    }
+        std::unique_lock<std::mutex> lock(frameMutex);
+        frameAvailable.wait(lock, [] { return !frameQueues.empty() || !isRunning; });
 
-private:
-    void run()
-    {
-        cv::VideoCapture cap;
-        cv::Mat bgrImg;
-
-        while (!m_stopped.load())
+        for (auto& [streamId, queue] : frameQueues)
         {
-            cap.open(m_path);
-            if (!cap.isOpened())
+            // 保留队列中的最新帧
+            if (queue.size() > 1)
             {
-                cerr << "Invalid video file" << endl;
-                exit(EXIT_FAILURE);
+                while (queue.size() > 1)
+                {
+                    queue.pop();  // 移除旧帧，只保留最新帧
+                }
             }
 
-            auto frameDuration = chrono::microseconds(static_cast<int>(1e6 / cap.get(cv::CAP_PROP_FPS)));
-            auto frameTime = chrono::steady_clock::now();
-            while (!m_stopped.load())
+            if (!queue.empty())
             {
-                cap.read(bgrImg);
-                if (bgrImg.empty())
+                cv::Mat frame = queue.front();
+                queue.pop();
+
+                lock.unlock();  // 解锁以便其他线程继续处理
+
+                if (!frame.empty())
                 {
-                    break;
+                    cv::imshow(streamId, frame);  // 在对应的窗口中显示帧
+                    cv::waitKey(10);  // 增加等待时间，降低刷新率
                 }
 
-                int64_t timestampUs =
-                    chrono::duration_cast<chrono::microseconds>(chrono::steady_clock::now().time_since_epoch()).count();
-                sendFrame(bgrImg, timestampUs);
-
-                frameTime += frameDuration;
-                this_thread::sleep_until(frameTime);
+                lock.lock();  // 重新上锁
             }
         }
     }
-};
 
-constexpr uint32_t SoundCardTotalDelayMs = 0;
-constexpr int BitsPerSample = 16;
-constexpr int SampleRate = 48000;
-constexpr size_t NumberOfChannels = 1;
-constexpr chrono::milliseconds SinAudioSourceFrameDuration = 10ms;
-constexpr chrono::milliseconds SinAudioSourceSleepBuffer = 2ms;
-constexpr int16_t SinAudioSourceAmplitude = 15000;
+    // 销毁所有窗口
+    for (const auto& streamId : streamerList)
+    {
+        cv::destroyWindow(streamId);
+    }
+}
 
-class SinAudioSource : public AudioSource
+
+// Callback function to receive video frames and push frames into the corresponding queue
+void onVideoFrameReceived(const std::string& streamId, const cv::Mat& frame, uint64_t timestampUs)
 {
-    atomic_bool m_stopped;
-    thread m_thread;
+    std::lock_guard<std::mutex> lock(frameMutex);
+    frameQueues[streamId].push(frame);  // Use streamId as the key for the queue
+    frameAvailable.notify_one();
+}
 
-public:
-    SinAudioSource()
-        : AudioSource(
-              AudioSourceConfiguration::create(SoundCardTotalDelayMs),
-              BitsPerSample,
-              SampleRate,
-              NumberOfChannels),
-          m_stopped(false),
-          m_thread(&SinAudioSource::run, this)
-    {
-    }
-
-    ~SinAudioSource() override
-    {
-        m_stopped.store(true);
-        m_thread.join();
-    }
-
-private:
-    void run()
-    {
-        vector<int16_t> data(SinAudioSourceFrameDuration.count() * SampleRate / 1000, 0);
-        double t = 0;
-        for (size_t i = 0; i < data.size(); i++)
-        {
-            data[i] = static_cast<int16_t>(SinAudioSourceAmplitude * sin(t));
-            t += 2 * M_PI / static_cast<double>(data.size());
-        }
-
-        while (!m_stopped.load())
-        {
-            sendFrame(data.data(), data.size() * sizeof(int16_t) / bytesPerFrame());
-
-            auto start = chrono::steady_clock::now();
-            this_thread::sleep_for(SinAudioSourceFrameDuration - SinAudioSourceSleepBuffer);
-            while ((chrono::steady_clock::now() - start) < SinAudioSourceFrameDuration);
-        }
-    }
-};
-
-int main(int argc, char* argv[])
-{
-    // 配置 ICE Servers，尝试直接连接到信令服务器
+// A function to handle a single StreamClient instance in a separate thread
+void handleStreamer(const std::string& streamerId) {
+    // 配置 ICE Servers 和信令服务器
     vector<IceServer> iceServers = {
-        IceServer("stun:stun.l.google.com:19302")
-    };
-
-    // WebRTC 配置
+        //IceServer("stun:stun.l.google.com:19302"),
+        IceServer("stun:stun3.l.google.com:19302"),
+        //IceServer("turn:192.168.0.165:3478", "webrtc", "ue5test")
+        };
     auto webrtcConfig = WebrtcConfiguration::create({iceServers});
+    auto signalingServerConfiguration = SignalingServerConfiguration::create(
+        "ws://192.168.0.165:80/signaling", "C++", "chat", "abc");
 
-    // 信令服务器配置
-    auto signalingServerConfiguration =
-        SignalingServerConfiguration::create("ws://192.168.0.165:80/signaling", "C++", "chat", "abc");
+    // 创建 StreamClient 实例并关联 streamId
+    auto client = std::make_unique<StreamClient>(
+        signalingServerConfiguration,
+        webrtcConfig,
+        VideoStreamConfiguration::create(),
+        std::vector<std::string>{streamerId},
+        streamerId);
 
-    // 初始化 UE5PixelStreamingSignalingClient 并设置流列表
-    std::vector<std::string> streamerList = {"Camera01_Default", "Camera02_Default"};
+    client->setOnSignalingConnectionOpened([streamerId]() {
+        std::cout << "Signaling connection opened for streamer: " << streamerId << std::endl;
+    });
 
-    //auto videoStreamConfiguration = VideoStreamConfiguration::create();
-    //auto signalingClient = make_unique<UE5PixelStreamingSignalingClient>(
-    //    signalingServerConfiguration, 
-    //    streamerList,
-    //    std::move(videoStreamConfiguration));
+    client->setOnClientConnected([streamerId](const Client& client) {
+        clientIdToStreamId[client.id()] = streamerId;
+        //std::cout << "Connected to streamer: " << streamerId << " with Client ID: " << client.id() << std::endl;
+    });
 
-    //// 设置信令客户端的回调
-    //signalingClient->setOnSignalingConnectionOpened([]() {
-    //    cout << "Signaling connection opened." << endl;
-    //});
-    //signalingClient->setOnSignalingConnectionClosed([]() {
-    //    cout << "Signaling connection closed." << endl;
-    //});
-    //signalingClient->setOnSignalingConnectionError([](const string& error) {
-    //    cerr << "Signaling error: " << error << endl;
-    //});
-    //signalingClient->setOnRoomClientsChanged([](const vector<Client>& clients) {
-    //    cout << "Room clients updated:" << endl;
-    //    for (const auto& client : clients) {
-    //        cout << " - ID: " << client.id() << ", Name: " << client.name() << endl;
-    //    }
-    //});
+    client->setOnClientDisconnected([](const Client& client) {
+        clientIdToStreamId.erase(client.id());
+        std::cout << "Disconnected client ID: " << client.id() << std::endl;
+    });
 
-    //// 连接信令服务器
-    //signalingClient->connect();
-
-    //// 保持程序运行，直到手动关闭
-    //cin.get();
-
-    //// 关闭连接
-    //signalingClient->close();
-
-    //return 0;
-
-    auto webrtcConfiguration = WebrtcConfiguration::create(iceServers);
-    auto videoStreamConfiguration = VideoStreamConfiguration::create();
-    //auto videoSource = make_shared<CvVideoCaptureVideoSource>(argv[1]);
-    //auto audioSource = make_shared<SinAudioSource>();
-    StreamClient
-        //client(signalingServerConfiguration, webrtcConfiguration, videoStreamConfiguration, videoSource, audioSource);
-        client(signalingServerConfiguration, webrtcConfiguration, videoStreamConfiguration);
-
-    client.setOnSignalingConnectionOpened(
-        []()
-        {
-            // This callback is called from the internal client thread.
-            cout << "OnSignalingConnectionOpened" << endl;
-        });
-    client.setOnSignalingConnectionClosed(
-        []()
-        {
-            // This callback is called from the internal client thread.
-            cout << "OnSignalingConnectionClosed" << endl;
-        });
-    client.setOnSignalingConnectionError(
-        [](const string& error)
-        {
-            // This callback is called from the internal client thread.
-            cout << "OnSignalingConnectionError:" << endl << "\t" << error;
+    // 设置视频帧接收回调，使用 Lambda 绑定 streamerId
+    client->setOnVideoFrameReceived(
+        [streamerId](const Client& client, const cv::Mat& frame, uint64_t timestampUs) {
+            onVideoFrameReceived(streamerId, frame, timestampUs);
         });
 
-    client.setOnClientConnected(
-        [](const Client& client)
-        {
-            // This callback is called from the internal client thread.
-            cout << "OnClientConnected:" << endl;
-            cout << "\tid=" << client.id() << ", name=" << client.name() << endl;
-            //cv::namedWindow("DefaultWindow", cv::WINDOW_AUTOSIZE);
-        });
-    client.setOnClientDisconnected(
-        [](const Client& client)
-        {
-            // This callback is called from the internal client thread.
-            cout << "OnClientDisconnected:" << endl;
-            cout << "\tid=" << client.id() << ", name=" << client.name() << endl;
-            cv::destroyWindow(client.id());
-        });
-    client.setOnClientConnectionFailed(
-        [](const Client& client)
-        {
-            // This callback is called from the internal client thread.
-            cout << "OnClientConnectionFailed:" << endl;
-            cout << "\tid=" << client.id() << ", name=" << client.name() << endl;
-        });
+    // 连接信令服务器
+    client->connect();
 
-    client.setOnError(
-        [](const string& error)
-        {
-            // This callback is called from the internal client thread.
-            cout << "error:" << endl;
-            cout << "\t" << error << endl;
-        });
+    // 保持线程运行直到程序退出
+    while (isRunning) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
 
-    client.setLogger(
-        [](const string& message)
-        {
-            // This callback is called from the internal client thread.
-            cout << "log:" << endl;
-            cout << "\t" << message << endl;
-        });
+int main(int argc, char* argv[]) {
+    //UdpTransmitSocket transmitSocket(IpEndpointName(ADDRESS, PORT));
+    //std::string input;
+    //std::cout << "Enter a message to send: ";
+    //std::getline(std::cin, input);
 
-    client.setOnRemoveRemoteStream(
-        [](const Client& client)
-        {
-            // This callback is called from the internal client thread.
-            cout << "OnRemoveRemoteStream:" << endl;
-            cout << "\tid=" << client.id() << ", name=" << client.name() << endl;
-        });
-    client.setOnVideoFrameReceived(
-        [](const Client& client, const cv::Mat& bgrImg, uint64_t timestampUs)
-        {
-            // This callback is called from a WebRTC processing thread.
-            cout << "OnVideoFrameReceived:" << endl;
-            cv::imshow("DefaultWindow", bgrImg);
-            cv::waitKey(1);
-        });
-    //client.setOnAudioFrameReceived(
-    //    [](const Client& client,
-    //       const void* audioData,
-    //       int bitsPerSample,
-    //       int sampleRate,
-    //       size_t numberOfChannels,
-    //       size_t numberOfFrames)
-    //    {
-    //        // This callback is called from a WebRTC processing thread.
-    //        cout << "OnAudioFrameReceived:" << endl;
-    //        cout << "\tid=" << client.id() << ", name=" << client.name() << endl;
-    //        cout << "\tbitsPerSample=" << bitsPerSample << ", sampleRate = " << sampleRate;
-    //        cout << ", numberOfChannels = " << numberOfChannels << ", numberOfFrames=" << numberOfFrames << endl;
-    //    });
-    //client.setOnMixedAudioFrameReceived(
-    //    [](const void* audioData, int bitsPerSample, int sampleRate, size_t numberOfChannels, size_t numberOfFrames)
-    //    {
-    //        // This callback is called from the audio device module thread.
-    //        cout << "OnMixedAudioFrameReceived:" << endl;
-    //        cout << "\tbitsPerSample=" << bitsPerSample << ", sampleRate=" << sampleRate;
-    //        cout << ", numberOfChannels=" << numberOfChannels << ", numberOfFrames=" << numberOfFrames << endl;
-    //    });
+    //char buffer[OUTPUT_BUFFER_SIZE];
+    //osc::OutboundPacketStream p(buffer, OUTPUT_BUFFER_SIZE);
 
-    client.connect();
+    //p << osc::BeginBundleImmediate
+    //        << osc::BeginMessage("/unreal/move")
+    //        << input.c_str() << osc::EndMessage
+    //        << osc::EndBundle;
 
-    cin.get();
+    //    transmitSocket.Send(p.Data(), p.Size());
+
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " <streamer1> <streamer2> ..." << std::endl;
+        return 1;
+    }
+
+    // 获取命令行参数中的 streamer 列表
+    std::vector<std::string> streamerList;
+    if (std::string(argv[1]) == "all") {
+        streamerList = {
+            "Camera01_Default", "Camera02_Default", "Camera03_Default", "Camera04_Default",
+            "Camera05_Fisheye", "Camera06_Fisheye", "Camera07_Fisheye", "Camera08_Fisheye"
+        };
+    } else {
+        for (int i = 1; i < argc; ++i) {
+            streamerList.emplace_back(argv[i]);
+        }
+    }
+    // 启动 OSC 消息处理线程
+    std::thread oscThread(oscMessageHandler);
+
+    // 启动显示线程
+    std::thread display(displayThread, streamerList);
+
+    // 启动每个 streamer 的独立线程
+    std::vector<std::thread> streamerThreads;
+    for (const auto& streamerId : streamerList) {
+        streamerThreads.emplace_back(handleStreamer, streamerId);
+    }
+
+    //// 等待用户输入以退出程序
+    //std::cin.get();
+
+    display.join();
+    // 停止所有线程
+    isRunning = false;
+    frameAvailable.notify_all();
+
+    for (auto& t : streamerThreads) {
+        if (t.joinable()) {
+            t.join();
+        }
+    }
 
     return 0;
 }
