@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.14.0)
 
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 project(CppUE5PixelStreamingClient)
@@ -13,13 +18,28 @@ include_directories(../../opentera-webrtc-native-client/3rdParty/IXWebSocket)
 include_directories(../../opentera-webrtc-native-client/3rdParty/cpp-httplib)
 include_directories(../../opentera-webrtc-native-client/OpenteraWebrtcNativeClient/include)
 
-add_executable(CppUE5PixelStreamingClient main.cpp)
+find_package(X11 REQUIRED)
+
+
+add_executable(CppUE5PixelStreamingClient 
+    main.cpp
+    mainwindow.cpp
+    mainwindow.h
+    monitors.cpp
+    monitors.h
+    videowidget.cpp    
+    videowidget.h      
+    )
 
 target_link_libraries(CppUE5PixelStreamingClient
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
     OpenteraWebrtcNativeClient
     opencv_videoio
     opencv_highgui
     oscpack
+    ${X11_LIBRARIES}
 )
 
 if (NOT WIN32)

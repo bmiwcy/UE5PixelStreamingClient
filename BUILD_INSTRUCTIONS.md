@@ -36,6 +36,18 @@ python -m pip install -r requirements.txt
 git submodule update --init --recursive
 ```
 
+### Install oscpack
+```bash
+sudo apt update
+sudo apt install build-essential
+
+sudo apt install liboscpack-dev
+```
+### check it
+```bash
+dpkg -l | grep liboscpack
+```
+
 ### Prepare Build with CMake (Ubuntu)
 
 ```bash
