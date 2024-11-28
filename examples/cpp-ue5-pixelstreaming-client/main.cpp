@@ -97,12 +97,10 @@ void oscMessageHandler() {
 void onVideoFrameReceived(MainWindow* mainWindow, const std::string& streamId, const cv::Mat& frame, uint64_t timestampUs)
 {
     if (!mainWindow) {
-        qDebug() << "Error: mainWindow is null";
         return;
     }
 
     if (frame.empty()) {
-        qDebug() << "Error: Received empty frame for" << QString::fromStdString(streamId);
         return;
     }
 
@@ -111,14 +109,13 @@ void onVideoFrameReceived(MainWindow* mainWindow, const std::string& streamId, c
         cv::Mat frameCopy = frame.clone();
         mainWindow->addFrame(streamId, frameCopy);
     } catch (const std::exception& e) {
-        qDebug() << "Exception in onVideoFrameReceived:" << e.what();
     }
 }
 
 // A function to handle a single StreamClient instance in a separate thread
 void handleStreamer(MainWindow* mainWindow, const std::string& streamerId) {
     vector<IceServer> iceServers = {
-        IceServer("stun:stun3.l.google.com:19302"),
+        IceServer("stun:stun2.l.google.com:19302"),
     };
     auto webrtcConfig = WebrtcConfiguration::create({iceServers});
     auto signalingServerConfiguration = SignalingServerConfiguration::create(

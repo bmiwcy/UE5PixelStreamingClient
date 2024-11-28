@@ -44,7 +44,7 @@ void VideoWidget::paintEvent(QPaintEvent* event)
     
     // If no image is available, draw a red background
     if (m_image.isNull()) {
-        painter.fillRect(rect(), QColor(255, 0, 0));  // Red background
+        painter.fillRect(rect(), QColor(128, 128, 128));  // Red background
         return;
     }
 

@@ -37,69 +37,50 @@ void MainWindow::setupVideoWidgets()
 void MainWindow::distributeWindowsToScreens()
 {
     QList<QScreen*> screens = QGuiApplication::screens();
-    
-    // Hide all windows initially
+    int screenCount = screens.size();
+
+    if (screenCount == 0) {
+        qDebug() << "Error: No screens detected!";
+        return; // Exit if no screens are available to avoid crashes
+    }
+
+    // Dynamically generate a list of available screens
+    std::vector<QScreen*> availableScreens;
+    for (QScreen* screen : screens) {
+        availableScreens.push_back(screen);
+    }
+
+    // Hide all video widgets initially to prepare for repositioning
     for (auto& [streamId, widget] : m_videoWidgets) {
         widget->hide();
     }
 
-    // Mapping relationship
-    struct ScreenInfo {
-        QScreen* screen;
-        QRect geometry;
-        QString position;
-    };
-
-    std::vector<ScreenInfo> screenInfos = {
-        {screens[0], screens[0]->geometry(), "Center"}, // XWAYLAND0
-        {screens[1], screens[1]->geometry(), "Left"},   // XWAYLAND1
-        {screens[2], screens[2]->geometry(), "Right"}   // XWAYLAND2
-    };
-
-    std::map<std::string, int> streamToScreenIndex = {
-        {"Camera01_Default", 1}, // Left
-        {"Camera02_Default", 0}, // Center
-        {"Camera03_Default", 2}  // Right
-    };
-
+    // Distribute video widgets across screens
+    int screenIndex = 0;
     for (auto& [streamId, widget] : m_videoWidgets) {
-        int screenIndex = streamToScreenIndex[streamId];
-        if (screenIndex < screenInfos.size()) {
-            const auto& info = screenInfos[screenIndex];
-            QString qStreamId = QString::fromStdString(streamId);
-            
-            // Set window properties
-            widget->setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
-            widget->setScreen(info.screen);
-            
-            // Ensure the window position fully matches the screen
-            widget->setGeometry(info.geometry);
-            
-            QTimer::singleShot(500 * screenIndex, this, [widget, info, qStreamId]() {
-                if (widget) {
-                    
-                    // Re-confirm screen and position
-                    widget->setScreen(info.screen);
-                    widget->setGeometry(info.geometry);
-                    widget->showFullScreen();
-                    
-                    QTimer::singleShot(100, widget, [widget, info, qStreamId]() {
-                        
-                        // Force the correct geometry
-                        widget->setGeometry(info.geometry);
-                        
-                        // Final check
-                        QTimer::singleShot(50, widget, [widget, info, qStreamId]() {
-                            if (widget->geometry() != info.geometry) {
-                                widget->setGeometry(info.geometry);
-                            }
-                        });
-                    });
-                }
-            });
-        }
+        QScreen* targetScreen = availableScreens[screenIndex];
+
+        // Get the geometry of the target screen
+        QRect geometry = targetScreen->geometry();
+
+        // Configure the widget to fit the target screen
+        widget->setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+        widget->setScreen(targetScreen);
+        widget->setGeometry(geometry);
+
+        // Use a timer to ensure the widget displays correctly
+        QTimer::singleShot(500 * screenIndex, this, [widget, geometry]() {
+            widget->showFullScreen(); // Show the widget in full-screen mode
+            widget->setGeometry(geometry); // Ensure it matches the screen geometry
+        });
+
+        // Cycle through screens if the number of widgets exceeds available screens
+        screenIndex = (screenIndex + 1) % screenCount;
     }
+
+    qDebug() << "Distributed windows to" << screenCount << "screens.";
 }
+
 
 void MainWindow::addFrame(const std::string& streamId, const cv::Mat& frame)
 {
