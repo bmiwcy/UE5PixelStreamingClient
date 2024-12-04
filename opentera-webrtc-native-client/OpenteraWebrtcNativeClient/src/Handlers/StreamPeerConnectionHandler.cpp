@@ -25,7 +25,8 @@ StreamPeerConnectionHandler::StreamPeerConnectionHandler(
     function<void(const Client&)> onRemoveRemoteStream,
     const VideoFrameReceivedCallback& onVideoFrameReceived,
     const EncodedVideoFrameReceivedCallback& onEncodedVideoFrameReceived,
-    const AudioFrameReceivedCallback& onAudioFrameReceived)
+    const AudioFrameReceivedCallback& onAudioFrameReceived,
+    const function<void(const Client&, rtc::scoped_refptr<webrtc::DataChannelInterface>)>& onDataChannelOpened)
     : PeerConnectionHandler(
           move(id),
           move(peerClient),
@@ -40,7 +41,8 @@ StreamPeerConnectionHandler::StreamPeerConnectionHandler(
       m_videoTrack(move(videoTrack)),
       m_audioTrack(move(audioTrack)),
       m_onAddRemoteStream(move(onAddRemoteStream)),
-      m_onRemoveRemoteStream(move(onRemoveRemoteStream))
+      m_onRemoveRemoteStream(move(onRemoveRemoteStream)),
+      m_onDataChannelOpened(onDataChannelOpened)
 {
     if (onVideoFrameReceived)
     {
@@ -280,5 +282,11 @@ void StreamPeerConnectionHandler::setAllRemoteTracksEnabled(const char* kind, bo
         {
             track->set_enabled(enabled);
         }
+    }
+}
+
+void StreamPeerConnectionHandler::OnDataChannel(rtc::scoped_refptr<webrtc::DataChannelInterface> data_channel) {
+    if (m_onDataChannelOpened) {
+        m_onDataChannelOpened(m_peerClient, data_channel);
     }
 }

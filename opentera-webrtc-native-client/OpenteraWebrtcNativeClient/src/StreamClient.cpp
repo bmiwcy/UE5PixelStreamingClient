@@ -240,7 +240,9 @@ unique_ptr<PeerConnectionHandler>
         onRemoveRemoteStream,
         m_onVideoFrameReceived,
         m_onEncodedVideoFrameReceived,
-        m_onAudioFrameReceived);
+        m_onAudioFrameReceived,
+        m_onDataChannelOpened
+        );
 }
 
 void StreamClient::connect()

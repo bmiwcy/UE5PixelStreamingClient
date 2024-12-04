@@ -62,7 +62,28 @@ namespace opentera
             std::function<void(const Client&)> onRemoveRemoteStream,
             const VideoFrameReceivedCallback& onVideoFrameReceived,
             const EncodedVideoFrameReceivedCallback& onEncodedVideoFrameReceived,
-            const AudioFrameReceivedCallback& onAudioFrameReceived);
+            const AudioFrameReceivedCallback& onAudioFrameReceived
+            );
+
+        StreamPeerConnectionHandler(
+            std::string id,
+            Client peerClient,
+            bool isCaller,
+            bool hasOnMixedAudioFrameReceivedCallback,
+            SignalingClient& m_signalingClient,
+            std::function<void(const std::string&)> onError,
+            std::function<void(const Client&)> onClientConnected,
+            std::function<void(const Client&)> onClientDisconnected,
+            std::function<void(const Client&)> onClientConnectionFailed,
+            rtc::scoped_refptr<webrtc::VideoTrackInterface> videoTrack,
+            rtc::scoped_refptr<webrtc::AudioTrackInterface> audioTrack,
+            std::function<void(const Client&)> onAddRemoteStream,
+            std::function<void(const Client&)> onRemoveRemoteStream,
+            const VideoFrameReceivedCallback& onVideoFrameReceived,
+            const EncodedVideoFrameReceivedCallback& onEncodedVideoFrameReceived,
+            const AudioFrameReceivedCallback& onAudioFrameReceived,
+            const std::function<void(const Client&, rtc::scoped_refptr<webrtc::DataChannelInterface>)>& onDataChannelOpened
+            );
 
         ~StreamPeerConnectionHandler() override;
 
@@ -75,6 +96,9 @@ namespace opentera
         // Observer methods
         void OnTrack(rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) override;
         void OnRemoveTrack(rtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver) override;
+
+        // 添加 DataChannel 回调
+        void OnDataChannel(rtc::scoped_refptr<webrtc::DataChannelInterface> data_channel) override;
 
     protected:
         void createAnswer() override;
@@ -91,6 +115,8 @@ namespace opentera
 
         void setAllLocalTracksEnabled(const char* kind, bool enabled);
         void setAllRemoteTracksEnabled(const char* kind, bool enabled);
+
+        std::function<void(const Client&, rtc::scoped_refptr<webrtc::DataChannelInterface>)> m_onDataChannelOpened;
     };
 }
 

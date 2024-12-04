@@ -28,6 +28,7 @@ namespace opentera
         VideoFrameReceivedCallback m_onVideoFrameReceived;
         EncodedVideoFrameReceivedCallback m_onEncodedVideoFrameReceived;
         AudioFrameReceivedCallback m_onAudioFrameReceived;
+        std::function<void(const Client&, rtc::scoped_refptr<webrtc::DataChannelInterface>)> m_onDataChannelOpened;
 
         bool m_isLocalAudioMuted;
         bool m_isRemoteAudioMuted;
@@ -90,6 +91,9 @@ namespace opentera
         void setOnEncodedVideoFrameReceived(const EncodedVideoFrameReceivedCallback& callback);
         void setOnAudioFrameReceived(const AudioFrameReceivedCallback& callback);
         void setOnMixedAudioFrameReceived(const AudioSinkCallback& callback);
+        void setOnDataChannelOpened(const std::function<void(const Client&, rtc::scoped_refptr<webrtc::DataChannelInterface>)>& callback) {
+            callSync(getInternalClientThread(), [this, &callback]() { m_onDataChannelOpened = callback; });
+        }
 
     protected:
         std::unique_ptr<PeerConnectionHandler>
@@ -102,6 +106,7 @@ namespace opentera
      */
     inline bool StreamClient::isLocalAudioMuted()
     {
+
         return callSync(getInternalClientThread(), [this]() { return m_isLocalAudioMuted; });
     }
 
@@ -279,6 +284,7 @@ namespace opentera
 
         m_audioDeviceModule->setOnMixedAudioFrameReceived(callback);
     }
+
 }
 
 #endif

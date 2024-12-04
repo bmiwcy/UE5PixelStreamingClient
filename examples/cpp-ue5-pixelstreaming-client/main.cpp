@@ -30,6 +30,8 @@
 
 #include "monitors.h"
 
+#include "datachannel_observer.h"
+
 using namespace opentera;
 using namespace std;
 
@@ -139,6 +141,15 @@ void handleStreamer(MainWindow* mainWindow, const std::string& streamerId) {
     client->setOnClientDisconnected([](const Client& client) {
         clientIdToStreamId.erase(client.id());
         std::cout << "Disconnected client ID: " << client.id() << std::endl;
+    });
+
+    client->setOnDataChannelOpened([streamerId](const Client& client, 
+        rtc::scoped_refptr<webrtc::DataChannelInterface> dataChannel) {
+        std::cout << "DataChannel opened for streamer: " << streamerId << std::endl;
+        
+        // 创建并注册观察者
+        auto observer = new rtc::RefCountedObject<CustomDataChannelObserver>(streamerId);
+        dataChannel->RegisterObserver(observer);
     });
 
     // Modify the video frame received callback to pass mainWindow
