@@ -130,3 +130,24 @@ void VideoWidget::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
 }
+
+
+void VideoWidget::setDisplayMode(DisplayMode mode)
+{
+    m_displayMode = mode;
+    if (mode == FullScreen) {
+        setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+        showFullScreen();
+    } else {
+        setWindowFlags(Qt::Window);
+        showNormal();
+    }
+}
+
+void VideoWidget::setGridPosition(const QRect& rect)
+{
+    m_gridRect = rect;
+    if (m_displayMode == GridLayout) {
+        setGeometry(rect);
+    }
+}

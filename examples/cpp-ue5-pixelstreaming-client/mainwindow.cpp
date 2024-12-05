@@ -8,12 +8,16 @@
 #include <QTimer>
 #include <QThread>
 
-MainWindow::MainWindow(const std::vector<std::string>& streamerList, QWidget *parent)
+
+MainWindow::MainWindow(const std::vector<std::string>& streamerList, 
+                      DisplayMode mode,
+                      QWidget *parent)
     : QMainWindow(parent)
     , m_streamerList(streamerList)
+    , m_displayMode(mode)
 {
     setupVideoWidgets();
-    distributeWindowsToScreens();
+    updateWindowLayout();
 }
 
 MainWindow::~MainWindow()
@@ -27,10 +31,9 @@ void MainWindow::setupVideoWidgets()
 {
     for (const auto& streamId : m_streamerList) {
         auto* widget = new VideoWidget(streamId);
-        widget->setWindowFlags(Qt::Window);  // Make it a standalone window
+        widget->setWindowFlags(Qt::Window);
         widget->setWindowTitle(QString::fromStdString(streamId));
         m_videoWidgets[streamId] = widget;
-        widget->show();
     }
 }
 
@@ -105,4 +108,63 @@ void MainWindow::closeEvent(QCloseEvent *event)
         widget->close();
     }
     event->accept();
+}
+
+void MainWindow::setDisplayMode(DisplayMode mode)
+{
+    if (m_displayMode != mode) {
+        m_displayMode = mode;
+        updateWindowLayout();
+    }
+}
+
+void MainWindow::updateWindowLayout()
+{
+    if (m_displayMode == FullScreen) {
+        distributeWindowsToScreens();
+    } else {
+        arrangeGridLayout();
+    }
+}
+
+void MainWindow::arrangeGridLayout()
+{
+    QScreen* primaryScreen = QGuiApplication::primaryScreen();
+    if (!primaryScreen) return;
+
+    QRect screenGeometry = primaryScreen->geometry();
+    int totalWidgets = m_videoWidgets.size();
+    
+    // 计算网格的行列数
+    int cols = qCeil(qSqrt(totalWidgets));
+    int rows = qCeil(totalWidgets / (double)cols);
+    
+    // 计算每个窗口的大小
+    int widgetWidth = screenGeometry.width() / cols;
+    int widgetHeight = screenGeometry.height() / rows;
+    
+    // 隐藏所有窗口以准备重新布局
+    for (auto& [streamId, widget] : m_videoWidgets) {
+        widget->hide();
+    }
+    
+    // 设置网格布局
+    int index = 0;
+    for (auto& [streamId, widget] : m_videoWidgets) {
+        int row = index / cols;
+        int col = index % cols;
+        
+        QRect widgetRect(
+            screenGeometry.x() + col * widgetWidth,
+            screenGeometry.y() + row * widgetHeight,
+            widgetWidth,
+            widgetHeight
+        );
+        
+        widget->setGeometry(widgetRect);
+        widget->setWindowFlags(Qt::Window);  // 普通窗口模式
+        widget->show();
+        
+        index++;
+    }
 }

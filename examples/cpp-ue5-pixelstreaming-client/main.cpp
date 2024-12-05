@@ -27,8 +27,10 @@
 #include <QScreen>
 #include <QPainter>   
 #include <QKeyEvent>
-#include "mainwindow.h"
+#include <QCommandLineParser>
+#include <QCommandLineOption>
 
+#include "mainwindow.h"
 #include "monitors.h"
 #include "datachannel_observer.h"
 #include "frame_synchronizer.h"
@@ -119,85 +121,171 @@ void onVideoFrameReceived(MainWindow* mainWindow, const std::string& streamId, c
 }
 
 void handleStreamer(MainWindow* mainWindow, const std::string& streamerId) {
-    vector<IceServer> iceServers = {
-        IceServer("stun:stun2.l.google.com:19302"),
-    };
-    auto webrtcConfig = WebrtcConfiguration::create({iceServers});
-    auto signalingServerConfiguration = SignalingServerConfiguration::create(
-        SINGALING_SERVER_ADDRESS, "C++", "chat", "abc");
-
-    auto client = std::make_unique<StreamClient>(
-        signalingServerConfiguration,
-        webrtcConfig,
-        VideoStreamConfiguration::create(),
-        std::vector<std::string>{streamerId},
-        streamerId);
-
-    client->setOnSignalingConnectionOpened([streamerId]() {
-        std::cout << "Signaling connection opened for streamer: " << streamerId << std::endl;
-    });
-
-    client->setOnClientConnected([streamerId](const Client& client) {
-        clientIdToStreamId[client.id()] = streamerId;
-    });
-
-    client->setOnClientDisconnected([](const Client& client) {
-        clientIdToStreamId.erase(client.id());
-        std::cout << "Disconnected client ID: " << client.id() << std::endl;
-    });
-
-    client->setOnDataChannelOpened([streamerId](const Client& client, 
-        rtc::scoped_refptr<webrtc::DataChannelInterface> dataChannel) {
-        std::cout << "DataChannel opened for streamer: " << streamerId << std::endl;
-        
-        auto observer = new rtc::RefCountedObject<CustomDataChannelObserver>(streamerId);
-        dataChannel->RegisterObserver(observer);
-    });
-
-    client->setOnVideoFrameReceived(
-        [mainWindow, streamerId](const Client& client, const cv::Mat& frame, uint64_t timestampUs) {
-            onVideoFrameReceived(mainWindow, streamerId, frame, timestampUs);
-        });
-
-    client->connect();
-
+    const int MAX_RETRY_COUNT = 3;    
+    const int RETRY_DELAY_MS = 1000;  
+    
     while (isRunning) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        try {
+            vector<IceServer> iceServers = {
+                IceServer("stun:stun2.l.google.com:19302"),
+            };
+            auto webrtcConfig = WebrtcConfiguration::create({iceServers});
+            auto signalingServerConfiguration = SignalingServerConfiguration::create(
+                SINGALING_SERVER_ADDRESS, "C++", "chat", "abc");
+
+            auto client = std::make_unique<StreamClient>(
+                signalingServerConfiguration,
+                webrtcConfig,
+                VideoStreamConfiguration::create(),
+                std::vector<std::string>{streamerId},
+                streamerId);
+
+            bool connectionLost = false;
+            std::mutex reconnectMutex;
+            std::condition_variable reconnectCV;
+            int retryCount = 0;
+
+            // 设置连接断开回调
+            client->setOnSignalingConnectionClosed([&]() {
+                std::cout << "Signaling connection closed for streamer: " << streamerId << std::endl;
+                std::lock_guard<std::mutex> lock(reconnectMutex);
+                connectionLost = true;
+                reconnectCV.notify_one();
+            });
+
+            client->setOnSignalingConnectionError([&](const std::string& error) {
+                std::cout << "Signaling connection error for streamer: " << streamerId 
+                         << " Error: " << error << std::endl;
+                std::lock_guard<std::mutex> lock(reconnectMutex);
+                connectionLost = true;
+                reconnectCV.notify_one();
+            });
+
+            client->setOnSignalingConnectionOpened([&, streamerId]() {
+                std::cout << "Signaling connection opened for streamer: " << streamerId << std::endl;
+                std::lock_guard<std::mutex> lock(reconnectMutex);
+                retryCount = 0;  // 重置重试计数
+            });
+
+            client->setOnClientConnected([streamerId](const Client& client) {
+                clientIdToStreamId[client.id()] = streamerId;
+                std::cout << "Client connected: " << client.id() << " for streamer: " << streamerId << std::endl;
+            });
+
+            client->setOnClientDisconnected([&](const Client& client) {
+                clientIdToStreamId.erase(client.id());
+                std::cout << "Disconnected client ID: " << client.id() << std::endl;
+                std::lock_guard<std::mutex> lock(reconnectMutex);
+                connectionLost = true;
+                reconnectCV.notify_one();
+            });
+
+            client->setOnDataChannelOpened([streamerId](const Client& client, 
+                rtc::scoped_refptr<webrtc::DataChannelInterface> dataChannel) {
+                std::cout << "DataChannel opened for streamer: " << streamerId << std::endl;
+                auto observer = new rtc::RefCountedObject<CustomDataChannelObserver>(streamerId);
+                dataChannel->RegisterObserver(observer);
+            });
+
+            client->setOnVideoFrameReceived(
+                [mainWindow, streamerId](const Client& client, const cv::Mat& frame, uint64_t timestampUs) {
+                    onVideoFrameReceived(mainWindow, streamerId, frame, timestampUs);
+                });
+
+            // 尝试连接
+            std::cout << "Attempting to connect streamer: " << streamerId << std::endl;
+            client->connect();
+
+            // 等待连接断开或错误
+            std::unique_lock<std::mutex> lock(reconnectMutex);
+            while (!connectionLost && isRunning) {
+                reconnectCV.wait_for(lock, std::chrono::milliseconds(100));
+            }
+
+            if (connectionLost && isRunning) {
+                retryCount++;
+                std::cout << "Connection lost for streamer: " << streamerId 
+                         << " (Attempt " << retryCount << " of " << MAX_RETRY_COUNT << ")"
+                         << std::endl;
+                
+                if (retryCount < MAX_RETRY_COUNT) {
+                    std::cout << "Retrying in " << RETRY_DELAY_MS/1000.0 << " seconds..." << std::endl;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_DELAY_MS));
+                    continue;
+                } else {
+                    std::cout << "Max retry attempts reached for streamer: " << streamerId << std::endl;
+                    std::this_thread::sleep_for(std::chrono::seconds(5));  // 等待较长时间后继续尝试
+                    retryCount = 0;
+                }
+            }
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Error in handleStreamer for " << streamerId 
+                     << ": " << e.what() << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_DELAY_MS));
+        }
     }
 }
 
 int main(int argc, char* argv[]) {
+    qputenv("QT_QPA_PLATFORM", "xcb");
     QApplication app(argc, argv);
-    
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <streamer_id1> [streamer_id2 ...]" << std::endl;
+
+    // 设置命令行解析器
+    QCommandLineParser parser;
+    parser.setApplicationDescription("Multi-Stream Video Display Application");
+    parser.addHelpOption();
+    parser.addVersionOption();
+
+    // 添加显示模式选项
+    QCommandLineOption displayModeOption(
+        QStringList() << "d" << "display",
+        "Display mode (full: fullscreen per monitor, grid: grid layout on primary monitor)",
+        "mode",
+        "grid"  // 默认使用网格布局
+    );
+    parser.addOption(displayModeOption);
+
+    // 添加streamer参数支持
+    parser.addPositionalArgument("streamers", "Streamer IDs or 'all' for all cameras");
+
+    parser.process(app);
+
+    // 获取streamer参数
+    const QStringList args = parser.positionalArguments();
+    if (args.isEmpty()) {
+        std::cerr << "Usage: " << argv[0] << " [--display=grid|full] <streamer_id1> [streamer_id2 ...] or 'all'" << std::endl;
         return 1;
     }
 
-    // Retrieve the list of streamers from command-line arguments
+    // 获取显示模式
+    QString displayMode = parser.value(displayModeOption);
+    MainWindow::DisplayMode initialMode = 
+        (displayMode.toLower() == "full") ? MainWindow::FullScreen : MainWindow::GridLayout;
+
+    // 处理streamer列表
     std::vector<std::string> streamerList;
-    if (std::string(argv[1]) == "all") {
+    if (args[0] == "all") {
         streamerList = {
             "Camera01_Default", "Camera02_Default", "Camera03_Default", "Camera04_Default",
             "Camera05_Fisheye", "Camera06_Fisheye", "Camera07_Fisheye", "Camera08_Fisheye"
         };
     } else {
-        for (int i = 1; i < argc; ++i) {
-            streamerList.emplace_back(argv[i]);
+        for (const QString& arg : args) {
+            streamerList.emplace_back(arg.toStdString());
         }
     }
 
-    // Create the main window
-    std::unique_ptr<MainWindow> mainWindow = std::make_unique<MainWindow>(streamerList);
+    // 创建主窗口（只创建一次）
+    std::unique_ptr<MainWindow> mainWindow = std::make_unique<MainWindow>(streamerList, initialMode);
 
-    // Create frame synchronizer with 10 frame queue size and 100ms sync threshold
+    // 创建帧同步器
     g_frameSynchronizer = std::make_shared<FrameSynchronizer>(streamerList, 10, 40);
 
-    // Set up frame synchronizer callback
+    // 设置帧同步器回调
     g_frameSynchronizer->setCallback([](
         const std::unordered_map<std::string, cv::Mat>& frames,
         const std::unordered_map<std::string, std::string>& jsonData) {
-        
         std::cout << "\n=== Synchronized Data ===" << std::endl;
         
         // Print frame information
@@ -221,22 +309,22 @@ int main(int argc, char* argv[]) {
         std::cout << "========================\n" << std::endl;
     });
 
-    // Start the OSC message handling thread
+    // 启动OSC消息处理线程
     std::thread oscThread(oscMessageHandler);
 
-    // Launch a separate thread for each streamer
+    // 为每个streamer启动独立线程
     std::vector<std::thread> streamerThreads;
     for (const auto& streamerId : streamerList) {
         streamerThreads.emplace_back(handleStreamer, mainWindow.get(), streamerId);
     }
 
-    // Show the main window
+    // 显示主窗口
     mainWindow->show();
 
-    // Wait for the Qt event loop to finish
+    // 等待Qt事件循环结束
     int result = app.exec();
 
-    // Clean up resources
+    // 清理资源
     if (g_frameSynchronizer) {
         g_frameSynchronizer->stop();
     }
@@ -244,7 +332,7 @@ int main(int argc, char* argv[]) {
     isRunning = false;
     frameAvailable.notify_all();
 
-    // Wait for all threads to finish
+    // 等待所有线程结束
     for (auto& t : streamerThreads) {
         if (t.joinable()) {
             t.join();
@@ -257,3 +345,5 @@ int main(int argc, char* argv[]) {
 
     return result;
 }
+
+

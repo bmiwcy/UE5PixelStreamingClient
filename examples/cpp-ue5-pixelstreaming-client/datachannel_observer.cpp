@@ -26,7 +26,6 @@ void CustomDataChannelObserver::OnMessage(const webrtc::DataBuffer& buffer) {
             // Add JSON data to synchronizer
             if (g_frameSynchronizer) {
                 g_frameSynchronizer->addJsonData(m_streamerId, jsonStr);
-                std::cout << "Added JSON data from " << m_streamerId << " to synchronizer" << std::endl;
             } else {
                 std::cerr << "Warning: Frame synchronizer not initialized" << std::endl;
             }
