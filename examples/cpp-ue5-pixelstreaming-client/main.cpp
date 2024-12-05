@@ -19,6 +19,7 @@
 #include <condition_variable>
 #include <queue>
 #include <unordered_map>
+#include <chrono>
 
 #include <QApplication>
 #include <QMainWindow>
@@ -29,8 +30,8 @@
 #include "mainwindow.h"
 
 #include "monitors.h"
-
 #include "datachannel_observer.h"
+#include "frame_synchronizer.h"
 
 using namespace opentera;
 using namespace std;
@@ -41,6 +42,7 @@ std::mutex frameMutex;
 std::condition_variable frameAvailable;
 std::unordered_map<std::string, std::queue<cv::Mat>> frameQueues;
 std::atomic<bool> isRunning{true};
+std::shared_ptr<FrameSynchronizer> g_frameSynchronizer;
 
 // OSC 
 #define ADDRESS "192.168.0.165"
@@ -80,7 +82,7 @@ void oscMessageHandler() {
 
                 for (int i = 0; i < 6; ++i) {
                     p << values[i];
-                    std::cout << "Sending value: " << values[i] << std::endl; // Debug output
+                    std::cout << "Sending value: " << values[i] << std::endl;
                 }
 
                 p << osc::EndMessage
@@ -98,23 +100,24 @@ void oscMessageHandler() {
 
 void onVideoFrameReceived(MainWindow* mainWindow, const std::string& streamId, const cv::Mat& frame, uint64_t timestampUs)
 {
-    if (!mainWindow) {
-        return;
-    }
-
-    if (frame.empty()) {
+    if (!mainWindow || frame.empty()) {
         return;
     }
 
     try {
-        // Create a copy of the frame to ensure data safety
+        // Create a copy of the frame for display
         cv::Mat frameCopy = frame.clone();
         mainWindow->addFrame(streamId, frameCopy);
+
+        // Add frame to synchronizer
+        if (g_frameSynchronizer) {
+            g_frameSynchronizer->addFrame(streamId, frame, timestampUs);
+        }
     } catch (const std::exception& e) {
+        std::cerr << "Error in onVideoFrameReceived: " << e.what() << std::endl;
     }
 }
 
-// A function to handle a single StreamClient instance in a separate thread
 void handleStreamer(MainWindow* mainWindow, const std::string& streamerId) {
     vector<IceServer> iceServers = {
         IceServer("stun:stun2.l.google.com:19302"),
@@ -147,12 +150,10 @@ void handleStreamer(MainWindow* mainWindow, const std::string& streamerId) {
         rtc::scoped_refptr<webrtc::DataChannelInterface> dataChannel) {
         std::cout << "DataChannel opened for streamer: " << streamerId << std::endl;
         
-        // 创建并注册观察者
         auto observer = new rtc::RefCountedObject<CustomDataChannelObserver>(streamerId);
         dataChannel->RegisterObserver(observer);
     });
 
-    // Modify the video frame received callback to pass mainWindow
     client->setOnVideoFrameReceived(
         [mainWindow, streamerId](const Client& client, const cv::Mat& frame, uint64_t timestampUs) {
             onVideoFrameReceived(mainWindow, streamerId, frame, timestampUs);
@@ -168,6 +169,11 @@ void handleStreamer(MainWindow* mainWindow, const std::string& streamerId) {
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " <streamer_id1> [streamer_id2 ...]" << std::endl;
+        return 1;
+    }
+
     // Retrieve the list of streamers from command-line arguments
     std::vector<std::string> streamerList;
     if (std::string(argv[1]) == "all") {
@@ -181,8 +187,39 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Create the main window (use smart pointers to ensure proper destruction)
+    // Create the main window
     std::unique_ptr<MainWindow> mainWindow = std::make_unique<MainWindow>(streamerList);
+
+    // Create frame synchronizer with 10 frame queue size and 100ms sync threshold
+    g_frameSynchronizer = std::make_shared<FrameSynchronizer>(streamerList, 10, 40);
+
+    // Set up frame synchronizer callback
+    g_frameSynchronizer->setCallback([](
+        const std::unordered_map<std::string, cv::Mat>& frames,
+        const std::unordered_map<std::string, std::string>& jsonData) {
+        
+        std::cout << "\n=== Synchronized Data ===" << std::endl;
+        
+        // Print frame information
+        std::cout << "Frame sizes:" << std::endl;
+        for (const auto& [streamerId, frame] : frames) {
+            std::cout << "Camera " << streamerId 
+                     << " - Size: " << frame.size().width 
+                     << "x" << frame.size().height 
+                     << " channels: " << frame.channels() << std::endl;
+        }
+        
+        // Print JSON data
+        std::cout << "\nJSON data:" << std::endl;
+        for (const auto& [streamerId, json] : jsonData) {
+            if (!json.empty()) {
+                std::cout << "Camera " << streamerId 
+                         << " - JSON: " << json << std::endl;
+            }
+        }
+        
+        std::cout << "========================\n" << std::endl;
+    });
 
     // Start the OSC message handling thread
     std::thread oscThread(oscMessageHandler);
@@ -193,10 +230,17 @@ int main(int argc, char* argv[]) {
         streamerThreads.emplace_back(handleStreamer, mainWindow.get(), streamerId);
     }
 
+    // Show the main window
+    mainWindow->show();
+
     // Wait for the Qt event loop to finish
     int result = app.exec();
 
     // Clean up resources
+    if (g_frameSynchronizer) {
+        g_frameSynchronizer->stop();
+    }
+
     isRunning = false;
     frameAvailable.notify_all();
 

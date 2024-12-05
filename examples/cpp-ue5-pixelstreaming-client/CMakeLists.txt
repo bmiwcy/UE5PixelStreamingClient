@@ -31,6 +31,8 @@ add_executable(CppUE5PixelStreamingClient
     videowidget.h      
     datachannel_observer.cpp
     datachannel_observer.h
+    frame_synchronizer.cpp
+    frame_synchronizer.h
     )
 
 target_link_libraries(CppUE5PixelStreamingClient
