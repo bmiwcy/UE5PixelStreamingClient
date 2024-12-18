@@ -127,7 +127,8 @@ void handleStreamer(MainWindow* mainWindow, const std::string& streamerId) {
     while (isRunning) {
         try {
             vector<IceServer> iceServers = {
-                IceServer("stun:stun2.l.google.com:19302"),
+                //IceServer("stun:stun2.l.google.com:19302"),
+                //IceServer("turn:192.168.0.165:3478", "webrtc", "ue5test")
             };
             auto webrtcConfig = WebrtcConfiguration::create({iceServers});
             auto signalingServerConfiguration = SignalingServerConfiguration::create(
@@ -263,6 +264,8 @@ int main(int argc, char* argv[]) {
     MainWindow::DisplayMode initialMode = 
         (displayMode.toLower() == "full") ? MainWindow::FullScreen : MainWindow::GridLayout;
 
+    std::string StreamerId = "JsonStreamerComponent";
+
     // 处理streamer列表
     std::vector<std::string> streamerList;
     if (args[0] == "all") {
@@ -275,6 +278,9 @@ int main(int argc, char* argv[]) {
             streamerList.emplace_back(arg.toStdString());
         }
     }
+
+    std::string defaultStreamerId = "JsonStreamerComponent";
+    streamerList.push_back(defaultStreamerId);
 
     // 创建主窗口（只创建一次）
     std::unique_ptr<MainWindow> mainWindow = std::make_unique<MainWindow>(streamerList, initialMode);
